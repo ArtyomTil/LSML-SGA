@@ -1,0 +1,55 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, concat_ws, collect_list
+from pyspark.sql.window import Window
+
+# Create a Spark session (if not already created)
+spark = SparkSession.builder.appName("ClickstreamAnalysis").getOrCreate()
+
+# Load the clickstream data
+clickstream_df = spark.read.option("sep", "\t").csv('clickstream.csv', header=True, inferSchema=True)
+
+# Register the DataFrame as a SQL temporary view
+clickstream_df.createOrReplaceTempView("clickstream")
+
+# SQL query to filter out erroneous sessions
+clean_clickstream_query = """
+SELECT *
+FROM clickstream
+WHERE NOT event_type LIKE '%error%'
+"""
+
+# Execute the query and create a new view
+clean_clickstream_df = spark.sql(clean_clickstream_query)
+clean_clickstream_df.createOrReplaceTempView("clean_clickstream")
+
+# SQL query to construct routes within each session
+route_query = """
+SELECT user_id, session_id, CONCAT_WS('-', COLLECT_LIST(event_page)) AS route
+FROM (
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY user_id, session_id ORDER BY timestamp) AS rn
+    FROM clean_clickstream
+) GROUP BY user_id, session_id
+HAVING MAX(rn) = COUNT(*)
+"""
+
+# Execute the query and create a new view
+route_df = spark.sql(route_query)
+route_df.createOrReplaceTempView("session_routes")
+
+# SQL query to find the most frequent routes
+most_frequent_routes_query = """
+SELECT route, COUNT(*) AS count
+FROM session_routes
+GROUP BY route
+ORDER BY count DESC
+LIMIT 30
+"""
+
+# Execute the query
+most_frequent_routes_df = spark.sql(most_frequent_routes_query)
+
+# Show the results
+most_frequent_routes_df.show(truncate=False)
+
+# Stop the Spark session if necessary
+# spark.stop()
