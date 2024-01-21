@@ -1,11 +1,11 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, concat_ws, collect_list, max as sql_max
+from pyspark.sql.functions import col, concat_ws, collect_list
 
 import findspark
 findspark.init()
 
 # Initialize Spark session
-spark = SparkSession.builder.appName("ClickstreamAnalysisSQL").config("spark.hadoop.home.dir", os.environ["HADOOP_HOME"]).getOrCreate()
+spark = SparkSession.builder.appName("ClickstreamAnalysisSQL").getOrCreate()
 
 # Read the data
 clickstream_df = spark.read.csv('clickstream.csv', sep='\t', header=True, inferSchema=True)
@@ -44,7 +44,12 @@ LIMIT 30
 
 # Execute the query and show results
 top_routes_sql = spark.sql(query)
-top_routes_sql.show(truncate=False)
+top_routes_sql.show(30, truncate=False)
+
+# Create a file with results
+top_routes_sql.coalesce(1).write.format('csv').option("header", "true").save("resultSQL.csv")
+# Stop the Spark session
+spark.stop()
 
 # Create a file with results
 top_routes_sql.coalesce(1).write.format('csv').option("header", "true").save("resultSQL.csv")
