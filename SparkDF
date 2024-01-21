@@ -1,0 +1,21 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, concat_ws, collect_list, max as sql_max
+from pyspark.sql.window import Window
+
+spark = SparkSession.builder.appName("ClickstreamAnalysisDF").getOrCreate()
+
+df = spark.read.csv('clickstream.csv', sep='\t', header=True, inferSchema=True)
+
+window_spec = Window.partitionBy("user_id", "session_id").orderBy("timestamp").rowsBetween(Window.unboundedPreceding, Window.currentRow)
+df_with_error_flag = df.withColumn("error_flag", sql_max(col("event_type").like("%error%")).over(window_spec))
+
+df_clean = df_with_error_flag.filter(col("error_flag") == 0)
+df_routes = df_clean.withColumn("route", concat_ws("-", collect_list("event_page").over(window_spec)))
+
+distinct_routes = df_routes.select("user_id", "session_id", "route").distinct()
+route_counts = distinct_routes.groupBy("route").count()
+top_routes_df = route_counts.orderBy(col("count").desc()).limit(30)
+
+top_routes_df.show(truncate=False)
+
+spark.stop()
