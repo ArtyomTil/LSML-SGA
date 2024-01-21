@@ -2,20 +2,38 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, concat_ws, collect_list, max as sql_max
 from pyspark.sql.window import Window
 
+# Initialize a Spark session
 spark = SparkSession.builder.appName("ClickstreamAnalysisDF").getOrCreate()
 
+# Read file
 df = spark.read.csv('clickstream.csv', sep='\t', header=True, inferSchema=True)
 
+# Define a window specification:
+# - Partition the data by user_id and session_id
+# - Order by timestamp within each partition
+# - The window frame extends from the start of the partition to the current row
 window_spec = Window.partitionBy("user_id", "session_id").orderBy("timestamp").rowsBetween(Window.unboundedPreceding, Window.currentRow)
+
+# Add a column 'error_flag' that flags sessions with errors
 df_with_error_flag = df.withColumn("error_flag", sql_max(col("event_type").like("%error%")).over(window_spec))
 
+# Filter out events from sessions after an error has occurred
 df_clean = df_with_error_flag.filter(col("error_flag") == 0)
+
+# Create a new column 'route':
+# - Concatenate 'event_page' values within each session into a single string, separated by '-'
+# - The concatenation respects the order of events based on 'timestamp'
 df_routes = df_clean.withColumn("route", concat_ws("-", collect_list("event_page").over(window_spec)))
 
+# Select distinct routes for each session to avoid duplicates
 distinct_routes = df_routes.select("user_id", "session_id", "route").distinct()
+
+# Group by 'route' and count occurrences to determine route frequency
 route_counts = distinct_routes.groupBy("route").count()
+
+# Order the results by frequency (count) in descending order and limit to top 30 routes.Then show top 30 routes
 top_routes_df = route_counts.orderBy(col("count").desc()).limit(30)
 
-top_routes_df.show(truncate=False)
-
+top_routes_df.show(30, truncate=False)
+top_routes_df.coalesce(1).write.format('csv').option("header", "true").save("resultDF.csv")
 spark.stop()
